@@ -1,3 +1,92 @@
+import json
+import pandas as pd
+
+# Global configuration
+NUM_SAMPLES = 5  # Change this to show more/fewer samples per entity count
+
+
+def show_samples_by_entity_count(df, num_samples=NUM_SAMPLES, max_entity_count=5):
+    """
+    Display sample transactions grouped by entity count (0, 1, 2, 3, etc.)
+    
+    Args:
+        df: DataFrame with TEXT and ENTITIES_LABEL columns
+        num_samples: Number of samples to show per entity count
+        max_entity_count: Maximum entity count to display (default 5)
+    """
+    
+    # Group rows by entity count
+    entity_count_groups = {}
+    
+    for idx, row in df.iterrows():
+        try:
+            ents = json.loads(row['ENTITIES_LABEL'])
+            count = len(ents)
+        except:
+            count = 0
+        
+        if count not in entity_count_groups:
+            entity_count_groups[count] = []
+        
+        entity_count_groups[count].append(idx)
+    
+    # Display samples for each entity count
+    print("="*80)
+    print("TRANSACTION SAMPLES BY ENTITY COUNT")
+    print("="*80)
+    
+    for count in sorted(entity_count_groups.keys()):
+        if count > max_entity_count:
+            continue
+            
+        indices = entity_count_groups[count]
+        total = len(indices)
+        sample_indices = indices[:num_samples]
+        
+        print(f"\n{'='*80}")
+        print(f"ENTITY COUNT: {count} | Total: {total:,} transactions ({total/len(df)*100:.1f}%)")
+        print(f"Showing {min(num_samples, len(sample_indices))} samples:")
+        print(f"{'='*80}\n")
+        
+        for i, idx in enumerate(sample_indices, 1):
+            row = df.loc[idx]
+            
+            print(f"Sample {i} (Row {idx}):")
+            print(f"  TEXT: {row['TEXT']}")
+            
+            if 'ENTITIES_LABEL' in row:
+                try:
+                    ents = json.loads(row['ENTITIES_LABEL'])
+                    if ents:
+                        print(f"  ENTITIES:")
+                        for e in ents:
+                            entity_text = row['TEXT'][e['start_char']:e['end_char']]
+                            print(f"    - [{e['label']}] '{entity_text}' → {e['standardized_name']}")
+                    else:
+                        print(f"  ENTITIES: []")
+                except:
+                    print(f"  ENTITIES: [Parse Error]")
+            
+            print("-"*80)
+    
+    # Summary
+    print(f"\n{'='*80}")
+    print("SUMMARY")
+    print(f"{'='*80}")
+    for count in sorted(entity_count_groups.keys()):
+        if count > max_entity_count:
+            total_high = sum(len(entity_count_groups[c]) for c in entity_count_groups.keys() if c > max_entity_count)
+            print(f"  {max_entity_count+1}+ entities: {total_high:,} transactions ({total_high/len(df)*100:.1f}%)")
+            break
+        total = len(entity_count_groups[count])
+        print(f"  {count} entities: {total:,} transactions ({total/len(df)*100:.1f}%)")
+
+
+
+    # Show samples
+    show_samples_by_entity_count(train_df, num_samples=NUM_SAMPLES, max_entity_count=5)
+
+
 
 
 import pandas as pd
