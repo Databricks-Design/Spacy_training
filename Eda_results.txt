@@ -1,0 +1,104 @@
+
+
+## 📊 Executive Data Summary: Transaction Entity Model
+
+### 1. Dataset Health (Volume & Quality)
+**The Stat:** 265,977 total transactions.
+* **82%** contain usable data (Signal).
+* **18%** are empty/junk text (Noise).
+
+> **Stakeholder Significance:**
+> This is a **healthy, high-volume dataset**. The 18% "junk" data is actually valuable—it serves as "Negative Sampling," teaching the model to stay quiet when it sees irrelevant text (reducing False Positives).
+
+---
+
+### 2. Complexity & Architecture (The Overlap Issue)
+**The Stat:** **0.95%** of transactions (2,053 rows) contain conflicting/overlapping labels.
+* **Main Culprit:** `BUSINESS` vs `LOCATION` (e.g., "Dominos NY" where "NY" is both part of the business name and a location).
+
+> **Stakeholder Significance:**
+> While 1% seems small, these are often the most critical/complex transactions. Because of this, we **cannot use standard NER**. We must use **SpanCat (Span Categorization)** architecture to ensure we don't drop these details.
+
+---
+
+### 3. Model Configuration (The "Net Size")
+**The Stat:** **99.6%** of all entities are between **1 and 7 words** long.
+* Most entities (90%) are short (1-3 words).
+* The "Long Tail" (descriptions, long business names) caps out at 7 words.
+
+> **Stakeholder Significance:**
+> We have precise boundaries for the model. We will configure the model to scan for patterns up to **7 words long**. This maximizes accuracy without wasting computing power on impossibly long phrases.
+
+---
+
+### 4. Risk Assessment (Bias & Imbalance)
+**The Stat:** Extreme imbalance between common and rare types.
+* **Dominant:** `BUSINESS` (209k examples) & `LOCATION` (115k).
+* **At Risk:** `MARKETPLACE` (only **259** examples).
+
+> **Stakeholder Significance:**
+> **High Risk of Bias.** The model will learn `BUSINESS` perfectly but will likely ignore `MARKETPLACE` entirely because it is statistically insignificant (0.1% of data).
+> **Action Required:** We must artificially boost ("upsample") the Marketplace data, or the model will fail to detect it.
+
+---
+
+## EDA SUMMARY FOR STAKEHOLDERS
+
+**Dataset Overview:**
+- Training: 265,977 transactions
+- Validation: 28,214 transactions
+
+**Entity Coverage:**
+- 82% of transactions contain labeled entities
+- 18% have zero entities (negative examples)
+- Average: 1.8 entities per transaction
+
+**Transaction Distribution by Entity Count:**
+- 0 entities: 48,822 transactions (18%)
+- 1 entity: 77,774 transactions (29%)
+- 2 entities: 94,648 transactions (36%)
+- 3 entities: 29,651 transactions (11%)
+- 4+ entities: 15,082 transactions (6%)
+
+**Data Quality:**
+- ✓ 76% of transactions have 1-3 entities (good density)
+- ✓ Most entities are 1-3 words long (easy to detect)
+- ✓ 18% empty transactions provide negative training examples
+
+**Entity Type Distribution:**
+- BUSINESS: 209,454 (50%) - Most common
+- LOCATION: 115,677 (28%)
+- PAYMENT_TYPE: 35,439 (9%)
+- DIGITAL_WALLET: 14,712 (4%)
+- PAYMENT_PROCESSOR: 11,727 (3%)
+- FINANCIAL_INSTITUTION: 11,675 (3%)
+- PERSON: 6,948 (2%)
+- PLATFORM: 4,646 (1%)
+- DELIVERY_SERVICE: 3,096 (1%)
+- BNPL_PROVIDER: 2,876 (1%)
+- PAYMENT_NETWORK: 2,487 (1%)
+- MARKETPLACE: 259 (<1%)
+
+**Key Findings:**
+
+1. **Entity Coverage is Good**
+   - 82% labeled transactions is strong for NER training
+   - 18% empty transactions help reduce false positives
+
+2. **Data Distribution is Reasonable**
+   - Most transactions (76%) have 1-3 entities
+   - Very few complex transactions (>4 entities)
+
+3. **Overlapping Entities Found**
+   - 2,053 transactions (0.95%) have overlapping entity spans
+   - Most common: BUSINESS overlaps with LOCATION (520 cases)
+
+4. **Class Imbalance Present**
+   - BUSINESS dominates at 50% of all entities
+   - MARKETPLACE is rare with only 259 examples (0.1%)
+   - May need special handling for rare entity types
+
+**Recommendations:**
+✓ Dataset is ready for model training
+✓ Consider upsampling or monitoring performance for MARKETPLACE
+✓ Handle overlapping entities appropriately in model architecture
