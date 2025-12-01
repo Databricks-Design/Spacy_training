@@ -2,255 +2,197 @@ import pandas as pd
 import json
 import re
 from collections import Counter
-from itertools import combinations
 import numpy as np
 import io
+import math
+from difflib import SequenceMatcher
 
-# --- 1. Define Regex Patterns for Existing Rules ---
+# --- 1. Define Regex Patterns for ALL Original Rules ---
 
-# Pattern for ext1: Text within double quotes
-PATTERN_EXT1 = re.compile(r'"(.+?)"')
-# Pattern for ext4: Corporate Suffixes (preceded by a space or start of string, case-insensitive)
-PATTERN_EXT4 = re.compile(r'\b(INC\.|LLC|CO\.|COM|LTD|CORP|P\.\s*C\.|PC)\b', re.IGNORECASE)
-# Pattern for sim5: Asterisk noise
-PATTERN_SIM5 = re.compile(r'\*')
+# --- High-Precision Extraction Patterns (ext) ---
+PATTERN_EXT1 = re.compile(r'"(.+?)"') # Quotes
+PATTERN_EXT4 = re.compile(r'\b(INC\.|LLC|CO\.|COM|LTD|CORP|P\.\s*C\.|PC)\b', re.IGNORECASE) # Suffixes
 
-# --- 2. Data Loading Placeholder ---
+# --- Cleaning Patterns (sim) ---
+PATTERN_SIM1_SHORTHAND = re.compile(r'(debit card|credit card|debit|credit|card|crd|ref|cashier check purchase|paypal|NY|New York|Las Vegas|NV|San Francisco|SF|San Francis|San Mateo|San Jose|Port Melbourn|CA|JAMAICA|Sydney|NS|Log Angeles|AU|Surry Hills|Singapore|SG)', re.IGNORECASE)
+PATTERN_SIM2_ALPHANUM = re.compile(r'\d{5,}|[a-z]+\d+\w*|\d+[a-z]+\w*', re.IGNORECASE) # 5+ digits, or mixed alphanumeric
+PATTERN_SIM3_DATE_ID = re.compile(r'\d\d/\d\d|ref[\d^\s]*|crd[\d^\s]*', re.IGNORECASE) # MM/DD, REF..., CRD...
+PATTERN_SIM4_TRANSFER = re.compile(r'(internet transfer|online transfer)', re.IGNORECASE)
+PATTERN_SIM5_ASTERISK = re.compile(r'\*')
+PATTERN_SIM6_PUNCT = re.compile(r'[",.]') # Comma, quote, period
 
-def load_data():
+# --- 2. Data Loading Functions ---
+
+def load_data(is_validation=False):
     """
-    Placeholder function to load the 'mastercard_openbanking_nam.enrich.trainingforengdata_redacted_relabelled' data.
-    
-    NOTE: Replace this with your actual data loading method (e.g., read_csv, read_json, or database query).
-    
-    The function must return a Pandas DataFrame with the columns:
-    'TEXT', 'ENTITIES_LABEL', 'BUSINESS_LABEL', 'LOCATION_LABEL'.
+    Placeholder: Loads the data. Must be replaced with actual loading logic.
+    If is_validation=True, it loads the validation set (28,214 records).
     """
-    
-    # --- Example Mock Data for Demonstration (DELETE THIS SECTION) ---
-    mock_data = """
+    if is_validation:
+        print("\nLoading Validation Data...")
+        # --- MOCK VALIDATION DATA (Adjust slightly to show difference) ---
+        mock_data = """
 TEXT|ENTITIES_LABEL|BUSINESS_LABEL|LOCATION_LABEL
-CHECKCARD 0806 WM SUPERCENTER BIG SPRING TX|[{ "start_char": 11, "end_char": 25, "label": "BUSINESS", "standardized_name": "Walmart" }, { "start_char": 26, "end_char": 36, "label": "LOCATION", "standardized_name": "BIG SPRING" }, { "start_char": 37, "end_char": 39, "label": "LOCATION", "standardized_name": "TX" }] |Walmart|BIG SPRING||TX
-PAYPAL *Vendor A* Vendor B LLC|[{ "start_char": 7, "end_char": 15, "label": "BUSINESS", "standardized_name": "Vendor A" }, { "start_char": 17, "end_char": 30, "label": "BUSINESS", "standardized_name": "Vendor B" }] |Vendor A||Vendor B||LLC|
-PURCHASE AT "AMAZON" Marketplace|[{ "start_char": 15, "end_char": 21, "label": "MARKETPLACE", "standardized_name": "Amazon" }] |Amazon|
-DEBIT ATM - BANK OF AMER |[{ "start_char": 10, "end_char": 23, "label": "FINANCIAL_INSTITUTION", "standardized_name": "Bank of America" }] |
-Pizza HUT - NEW YORK, NY|[{ "start_char": 0, "end_char": 9, "label": "BUSINESS", "standardized_name": "Pizza Hut" }, { "start_char": 12, "end_char": 20, "label": "LOCATION", "standardized_name": "New York" }, { "start_char": 22, "end_char": 24, "label": "LOCATION", "standardized_name": "NY" }] |Pizza Hut|NEW YORK||NY
-    """
+PURCHASE "AMAZON" LLC REF123|[{ "start_char": 10, "end_char": 16, "label": "BUSINESS", "standardized_name": "Amazon" }] |Amazon|
+DEBIT ATM - BANK OF AMER |[{ "start_char": 10, "end_char": 23, "label": "FINANCIAL_INSTITUTION", "standardized_name": "Bank of America" }] ||
+PAYPAL *VendorA* VendorB - CA|[{ "start_char": 7, "end_char": 14, "label": "BUSINESS", "standardized_name": "Vendor A" }, { "start_char": 24, "end_char": 26, "label": "LOCATION", "standardized_name": "CA" }] |Vendor A|CA
+ONLINE TRANSFER 01/01|[]||
+SHORT MEMO|[{ "start_char": 0, "end_char": 10, "label": "BUSINESS", "standardized_name": "Short Memo" }] |Short Memo|
+        """
+    else:
+        print("\nLoading Training Data...")
+        # --- MOCK TRAINING DATA ---
+        mock_data = """
+TEXT|ENTITIES_LABEL|BUSINESS_LABEL|LOCATION_LABEL
+CHECKCARD WM SUPERCENTER BIG SPRING TX|[{ "start_char": 10, "end_char": 24, "label": "BUSINESS", "standardized_name": "Walmart" }, { "start_char": 25, "end_char": 35, "label": "LOCATION", "standardized_name": "BIG SPRING" }] |Walmart|BIG SPRING||TX
+PAYPAL *VendorA* VendorB - CA|[{ "start_char": 7, "end_char": 14, "label": "BUSINESS", "standardized_name": "Vendor A" }, { "start_char": 24, "end_char": 26, "label": "LOCATION", "standardized_name": "CA" }] |Vendor A|CA
+PURCHASE "AMAZON" LLC REF123|[{ "start_char": 10, "end_char": 16, "label": "BUSINESS", "standardized_name": "Amazon" }] |Amazon|
+DEBIT ATM - BANK OF AMER |[{ "start_char": 10, "end_char": 23, "label": "FINANCIAL_INSTITUTION", "standardized_name": "Bank of America" }] ||
+SHORT MEMO|[{ "start_char": 0, "end_char": 10, "label": "BUSINESS", "standardized_name": "Short Memo" }] |Short Memo|
+REPEATED REPEATED REF123|[{ "start_char": 0, "end_char": 8, "label": "BUSINESS", "standardized_name": "Repeated" }] |Repeated|
+INTERNET TRANSFER 01/01|[]||
+LONG VENDOR INC - NEW YORK|[{ "start_char": 0, "end_char": 13, "label": "BUSINESS", "standardized_name": "Long Vendor Inc" }, { "start_char": 16, "end_char": 24, "label": "LOCATION", "standardized_name": "NEW YORK" }] |Long Vendor Inc|NEW YORK
+        """
+
     df = pd.read_csv(io.StringIO(mock_data), sep='|')
-    # --- END MOCK DATA ---
     
-    # Required data preparation step: convert JSON string to actual list
-    df['spans'] = df['ENTITIES_LABEL'].apply(lambda x: json.loads(x) if pd.notna(x) and x else [])
-    
-    # Add helper columns for entity counting
+    # Required preparation steps
+    df['TEXT'] = df['TEXT'].fillna('').astype(str)
+    df['spans'] = df['ENTITIES_LABEL'].apply(lambda x: json.loads(x) if pd.notna(x) and x and isinstance(x, str) else [])
     df['num_entities'] = df['spans'].apply(len)
-    df['entity_labels'] = df['spans'].apply(lambda spans: sorted(list(set(e['label'] for e in spans))))
     
     return df
 
-# --- 3. Core Analysis Logic ---
+# --- 3. Analysis Functions (Abstracted) ---
 
-def check_coverage(row, pattern, entity_label):
-    """Checks if a record contains a pattern match AND an entity of a specific label."""
+def check_entity_match(row, pattern, entity_label=None):
+    """Checks if a record contains a pattern match AND optionally a specific entity."""
     text = row['TEXT']
-    spans = row['spans']
-    
-    # 1. Check if the pattern matches anywhere in the TEXT
     if not pattern.search(text):
-        return False, []
-    
-    # 2. Check if a relevant entity (BUSINESS/LOCATION) is present
-    relevant_spans = [e for e in spans if e['label'] == entity_label]
-    if not relevant_spans:
-        return False, []
+        return False
+    if entity_label is None:
+        return True
+    return any(e['label'] == entity_label for e in row['spans'])
 
-    # Simple Check: Did the pattern and entity occur in the same record?
-    return True, [e['standardized_name'] for e in relevant_spans]
+def check_repetition(text, threshold=0.8):
+    """Approximates ext2 (Repeated Words) by checking self-similarity."""
+    text_list = text.split()
+    if len(text_list) < 2: return False
+    mid = len(text_list) // 2
+    part1 = ' '.join(text_list[:mid])
+    part2 = ' '.join(text_list[mid:])
+    if len(part1) < 4 or len(part2) < 4: return False
+    ratio = SequenceMatcher(None, part1, part2).ratio()
+    return ratio > threshold
 
+def check_unique_entity_coverage(df, pattern, entity_label):
+    """Calculates unique entity coverage for ext1 and ext4."""
+    covered_names = set()
+    for index, row in df.iterrows():
+        if check_entity_match(row, pattern, entity_label):
+            for e in row['spans']:
+                if e['label'] == entity_label:
+                    covered_names.add(e['standardized_name'])
+    return covered_names
 
-def main():
-    """Executes the full Exploratory Data Analysis (EDA) flow."""
-    df = load_data()
+def run_analysis_suite(df, name):
+    """Runs the core analysis and returns key metrics for comparison."""
     total_records = len(df)
     
-    if total_records == 0:
-        print("Error: DataFrame is empty. Please check your data loading function.")
-        return
-
-    # --- PHASE 1: Entity Frequency and Span Analysis ---
+    # --- A. PATTERN NECESSITY ---
+    patterns_to_check = {
+        'sim1 (Shorthand)': PATTERN_SIM1_SHORTHAND,
+        'sim4 (Transfer)': PATTERN_SIM4_TRANSFER,
+        'sim6 (Punct)': PATTERN_SIM6_PUNCT
+    }
+    pattern_freqs = {n: df['TEXT'].apply(lambda x: bool(p.search(x))).sum() / total_records for n, p in patterns_to_check.items()}
     
-    print("## 📊 Phase 1: Entity Frequency and Span Analysis\n")
-
-    # A. Entity Count per Transaction
-    entity_counts = df['num_entities'].value_counts().sort_index()
-    max_entities = df['num_entities'].max()
-    print("### 1. Entity Count Distribution:")
-    print(f"| Entities | Count | Percent |")
-    print("|:--- | ---:| ---:|")
-    
-    for count, num in entity_counts.items():
-        if count < 5 or count == max_entities:
-            print(f"| {count} | {num:,} | {num / total_records * 100:.2f}% |")
-        elif count == 5:
-            print("| ... | ... | ... |")
-            
-    print(f"\n**Max Entities Found in a single transaction:** **{max_entities}**\n")
-
-    # B. BUSINESS & LOCATION Co-occurrence
-    total_business = df['BUSINESS_LABEL'].astype(bool).sum()
-    total_location = df['LOCATION_LABEL'].astype(bool).sum()
-
-    co_occurrence_df = df[df['entity_labels'].apply(lambda x: 'BUSINESS' in x and 'LOCATION' in x)]
-    co_occurrence_count = len(co_occurrence_df)
-
-    print("### 2. BUSINESS & LOCATION Co-occurrence:")
-    print(f"* Records with **both** BUSINESS and LOCATION: **{co_occurrence_count:,} ({co_occurrence_count / total_records * 100:.2f}%)**")
-
-    # C. Entity Span Analysis (Max Length)
-    all_entity_texts = []
-    for spans in df['spans']:
-        for entity in spans:
-            # We assume TEXT is in the dataframe, but for span text, we need the original row
-            # For simplicity, we use the standardized_name length for max span, which is close enough.
-            text_len = len(entity.get('standardized_name', ''))
-            if text_len > 0:
-                all_entity_texts.append(entity.get('standardized_name'))
-    
-    if all_entity_texts:
-        max_char_len = max(len(t) for t in all_entity_texts)
-        max_word_count = max(len(t.split()) for t in all_entity_texts)
-        print(f"* Maximum Word Count of an Entity Span: **{max_word_count}**")
-        print(f"* Maximum Character Length of an Entity Span: **{max_char_len}**")
-
-    print("\n" + "---" + "\n")
-    
-    # --- PHASE 2: Quantifying Coverage of Existing Rules ---
-
-    print("## 📈 Phase 2: Quantifying Coverage of Existing Rules\n")
-    
-    # A. BUSINESS Entity Coverage
-    # Calculate total unique business names only once
+    # --- B. BUSINESS COVERAGE BASELINE (ext1, ext4) ---
     unique_business_names = set()
     df['BUSINESS_LABEL'].dropna().apply(lambda x: unique_business_names.update(x.split('||')))
     total_unique_business = len(unique_business_names)
     
-    covered_business_names = set()
-
-    # ext1: Quotes
-    ext1_matches = df.apply(lambda row: check_coverage(row, PATTERN_EXT1, 'BUSINESS'), axis=1)
-    for matched, names in ext1_matches:
-        if matched:
-            for name in names: covered_business_names.add(name)
-    ext1_coverage = len(covered_business_names)
+    ext1_names = check_unique_entity_coverage(df, PATTERN_EXT1, 'BUSINESS')
+    ext4_names = check_unique_entity_coverage(df, PATTERN_EXT4, 'BUSINESS')
+    baseline_coverage_count = len(ext1_names.union(ext4_names))
     
-    # ext4: Suffixes
-    ext4_matches = df.apply(lambda row: check_coverage(row, PATTERN_EXT4, 'BUSINESS'), axis=1)
-    
-    ext4_initial_coverage = len(covered_business_names)
-    for matched, names in ext4_matches:
-        if matched:
-            for name in names: covered_business_names.add(name)
-    ext4_additional_coverage = len(covered_business_names) - ext4_initial_coverage
-
-    print("### 1. BUSINESS (Vendor) Coverage:")
-    print(f"* Total Unique BUSINESS Entities in Dataset: **{total_unique_business:,}**")
-    print(f"| Rule | Records Matched | Unique Entities Covered | Coverage Rate |")
-    print("|:--- | ---:| ---:| ---:|")
-    print(f"| **ext1 (Quotes)** | {ext1_matches.apply(lambda x: x[0]).sum():,} | {ext1_coverage:,} | {ext1_coverage / total_unique_business * 100:.2f}% |")
-    print(f"| **ext4 (Suffixes)** | {ext4_matches.apply(lambda x: x[0]).sum():,} | {ext4_additional_coverage:,} | {ext4_additional_coverage / total_unique_business * 100:.2f}% |")
-    print(f"| **Total Heuristic Coverage** | N/A | {len(covered_business_names):,} | **{len(covered_business_names) / total_unique_business * 100:.2f}%** |")
-
-
-    # B. LOCATION Entity Coverage & Noise
-    unique_location_names = set()
-    df['LOCATION_LABEL'].dropna().apply(lambda x: unique_location_names.update(x.split('||')))
-    total_unique_location = len(unique_location_names)
-
-    sim5_covered = 0
-    total_asterisk_records = df['TEXT'].apply(lambda x: bool(PATTERN_SIM5.search(str(x)))).sum()
-
-    for index, row in df.iterrows():
-        text = str(row['TEXT'])
-        
-        if PATTERN_SIM5.search(text):
-            last_asterisk_index = text.rfind('*')
-            
-            # Check if any LOCATION entity starts *after* the last asterisk
-            for entity in row['spans']:
-                if entity['label'] == 'LOCATION' and entity['start_char'] > last_asterisk_index:
-                    sim5_covered += 1
-                    break
-
-    print("\n### 2. LOCATION Coverage & Noise:")
-    print(f"* Total Unique LOCATION Entities in Dataset: {total_unique_location:,}")
-    print(f"* Total Records with an Asterisk (*): {total_asterisk_records:,} ({total_asterisk_records / total_records * 100:.2f}%)")
-    print(f"| Rule | Count | Noise Elimination Potential |")
-    print("|:--- | ---:| ---:|")
-    print(f"| **sim5 (Post-Asterisk)** | {sim5_covered:,} | **{sim5_covered / total_unique_location * 100:.2f}%** |")
-    
-    print("\n" + "---" + "\n")
-    
-    # --- PHASE 3: Dynamic Delimiter Discovery ---
-
-    print("## ✨ Phase 3: Dynamic Delimiter Pattern Discovery\n")
-
-    # A. Isolate Multi-Entity Records (focus on 2 entities for clean delimiters)
+    # --- C. COMPLEXITY AND DELIMITER FREQUENCY ---
     two_entity_df = df[df['num_entities'] == 2].copy()
     
-    all_delimiters = []
-    delimiter_examples = []
-    
-    # Iterate over transactions with exactly two entities
+    delimiter_counts = Counter()
     for index, row in two_entity_df.iterrows():
         spans = sorted(row['spans'], key=lambda x: x['start_char'])
-        
-        entity_a = spans[0]
-        entity_b = spans[1]
-        
-        # Extract text between the two entities
-        delimiter_text = row['TEXT'][entity_a['end_char']:entity_b['start_char']]
-        cleaned_delimiter = delimiter_text.strip()
-        
-        if cleaned_delimiter:
-            all_delimiters.append(cleaned_delimiter)
-            
-            # Store example for human review
-            if len(delimiter_examples) < 10 and cleaned_delimiter not in [e.get('delimiter') for e in delimiter_examples]:
-                delimiter_examples.append({
-                    'delimiter': cleaned_delimiter,
-                    'example_text': row['TEXT'],
-                    'entities': [entity_a['standardized_name'], entity_b['standardized_name']]
-                })
+        if len(spans) == 2:
+            delimiter_text = row['TEXT'][spans[0]['end_char']:spans[1]['start_char']]
+            cleaned_delimiter = delimiter_text.strip()
+            if cleaned_delimiter == '*': delimiter_counts['*'] += 1
+            if cleaned_delimiter == '-': delimiter_counts['-'] += 1
+            if cleaned_delimiter == ' - ': delimiter_counts[' - '] += 1
 
-    # B. Delimiter Frequency Analysis
-    delimiter_counts = Counter(all_delimiters)
-
-    # Filter for meaningful delimiters (not just a single space or punctuation)
-    # Allows single * or - or /
-    meaningful_delimiters = {k: v for k, v in delimiter_counts.items() if len(k.strip()) > 1 or k in ['*', '-', '/']}
-    top_delimiters = Counter(meaningful_delimiters).most_common(5)
-
-    print("### 1. Top 5 Meaningful Delimiter Patterns (Found in 2-Entity Transactions):")
-    print(f"Found {len(all_delimiters):,} total delimiters in {len(two_entity_df):,} two-entity transactions.")
-    print(f"| Rank | Delimiter Pattern | Frequency | Percentage of all Delimiters |")
-    print("|:---:|:---:|---:|---:|")
-    total_delimiters = len(all_delimiters)
-    for rank, (delimiter, count) in enumerate(top_delimiters, 1):
-        print(f"| {rank} | **'{delimiter}'** | {count:,} | {count / total_delimiters * 100:.2f}% |")
-
-    print("\n### 2. Example Transactions for Human Review:")
-    for ex in delimiter_examples:
-        print(f"\n- **Delimiter:** **'{ex['delimiter']}'**")
-        print(f"  **Text:** {ex['example_text']}")
-        print(f"  **Entities:** {ex['entities']}")
-
-    print("\n---")
-    print("### ✅ Dynamic Rule Recommendation:")
-    print(f"The analysis of 2-entity transactions highlights the need to split memos based on the detected separators.")
-    print(f"**DELIMITER-SPLIT RULE:** Define a rule to split the memo on high-frequency, non-entity separators like the top-ranked delimiter: **'{top_delimiters[0][0]}'**. The resulting segments should then be processed independently by the single-vendor extraction heuristics (ext1, ext4, etc.) to boost coverage of multi-entity records.")
-
+    # Get LOCATION Noise Check
+    total_asterisk_records = df['TEXT'].apply(lambda x: bool(PATTERN_SIM5_ASTERISK.search(str(x)))).sum()
+    
+    return {
+        'name': name,
+        'records': total_records,
+        'multi_entity_rate': df[df['num_entities'] >= 2].shape[0] / total_records,
+        'business_coverage_rate': baseline_coverage_count / total_unique_business if total_unique_business else 0,
+        'asterisk_delimiter_rate': delimiter_counts['*'] / len(two_entity_df) if len(two_entity_df) else 0,
+        'dash_delimiter_rate': (delimiter_counts['-'] + delimiter_counts[' - ']) / len(two_entity_df) if len(two_entity_df) else 0,
+        'sim1_freq': pattern_freqs['sim1 (Shorthand)'],
+        'sim4_freq': pattern_freqs['sim4 (Transfer)'],
+        'asterisk_total_freq': total_asterisk_records / total_records
+    }
 
 # --- 4. Main Execution Block ---
+
+def main():
+    
+    # 1. Run Analysis on TRAINING Data
+    df_train = load_data(is_validation=False)
+    results_train = run_analysis_suite(df_train, "Training")
+    
+    # 2. Run Analysis on VALIDATION Data
+    df_val = load_data(is_validation=True)
+    results_val = run_analysis_suite(df_val, "Validation")
+
+    # 3. Print Comparison
+    print("\n" + "#" * 70)
+    print("## 🔍 Validation Logic: Training vs. Validation Stability Check")
+    print("#" * 70)
+    
+    print("\n### 1. High-Level Dataset Comparison:")
+    print(f"| Dataset | Records | Multi-Entity Rate (>=2) |")
+    print("|:--- | ---:| ---:|")
+    print(f"| Training | {results_train['records']:,} | {results_train['multi_entity_rate'] * 100:.2f}% |")
+    print(f"| Validation | {results_val['records']:,} | {results_val['multi_entity_rate'] * 100:.2f}% |")
+    print("\n**Conclusion:** The Multi-Entity Rate (complexity) should be close (e.g., within 5 percentage points) across both sets.")
+
+    print("\n### 2. Rule Coverage and Frequency Stability:")
+    print("This table shows if the rules found on the training set hold true on the validation set.")
+    print("| Metric | Training Value | Validation Value | Delta (Validation - Training) | Stability |")
+    print("|:--- | ---:| ---:| ---:|:--- |")
+    
+    # BUSINESS COVERAGE
+    print(f"| **BUSINESS Baseline Coverage (ext1/ext4)** | {results_train['business_coverage_rate'] * 100:.2f}% | {results_val['business_coverage_rate'] * 100:.2f}% | {results_val['business_coverage_rate'] * 100 - results_train['business_coverage_rate'] * 100:.2f}% | {'STABLE' if abs(results_val['business_coverage_rate'] - results_train['business_coverage_rate']) < 0.05 else 'UNSTABLE'} |")
+    
+    # DELIMITER FREQUENCY
+    print(f"| Asterisk (*) Delimiter Rate | {results_train['asterisk_delimiter_rate'] * 100:.2f}% | {results_val['asterisk_delimiter_rate'] * 100:.2f}% | {results_val['asterisk_delimiter_rate'] * 100 - results_train['asterisk_delimiter_rate'] * 100:.2f}% | {'STABLE' if abs(results_val['asterisk_delimiter_rate'] - results_train['asterisk_delimiter_rate']) < 0.05 else 'UNSTABLE'} |")
+    print(f"| Dash (-) Delimiter Rate | {results_train['dash_delimiter_rate'] * 100:.2f}% | {results_val['dash_delimiter_rate'] * 100:.2f}% | {results_val['dash_delimiter_rate'] * 100 - results_train['dash_delimiter_rate'] * 100:.2f}% | {'STABLE' if abs(results_val['dash_delimiter_rate'] - results_train['dash_delimiter_rate']) < 0.05 else 'UNSTABLE'} |")
+
+    # CLEANING NECESSITY
+    print(f"| Asterisk (*) Total Frequency | {results_train['asterisk_total_freq'] * 100:.2f}% | {results_val['asterisk_total_freq'] * 100:.2f}% | {results_val['asterisk_total_freq'] * 100 - results_train['asterisk_total_freq'] * 100:.2f}% | {'STABLE' if abs(results_val['asterisk_total_freq'] - results_train['asterisk_total_freq']) < 0.05 else 'UNSTABLE'} |")
+    print(f"| Shorthand (sim1) Frequency | {results_train['sim1_freq'] * 100:.2f}% | {results_val['sim1_freq'] * 100:.2f}% | {results_val['sim1_freq'] * 100 - results_train['sim1_freq'] * 100:.2f}% | {'STABLE' if abs(results_val['sim1_freq'] - results_train['sim1_freq']) < 0.05 else 'UNSTABLE'} |")
+    print(f"| Transfer (sim4) Frequency | {results_train['sim4_freq'] * 100:.2f}% | {results_val['sim4_freq'] * 100:.2f}% | {results_val['sim4_freq'] * 100 - results_train['sim4_freq'] * 100:.2f}% | {'STABLE' if abs(results_val['sim4_freq'] - results_train['sim4_freq']) < 0.05 else 'UNSTABLE'} |")
+
+    print("\n### 3. Final Stability Conclusion:")
+    print("If all metrics are marked 'STABLE' (within 5% difference), the rules discovered are robust and can be reliably applied to the live data.")
+    print("If any key metric (especially BUSINESS Coverage) is 'UNSTABLE', it indicates that the validation set contains patterns missed by the training set, requiring further EDA on the unstable patterns.")
+    
+    # Optional: You can visualize this stability using a simple chart .
+
+
+# --- Execution Block ---
 
 if __name__ == "__main__":
     main()
