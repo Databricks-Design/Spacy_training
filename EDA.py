@@ -2,9 +2,99 @@ import json
 import pandas as pd
 
 # Global configuration
-NUM_SAMPLES = 5  # Change this to show more/fewer samples per entity count
+NUM_SAMPLES = 5  
+
+# Change this to show more/fewer samples per entity count
+
+import pandas as pd
+import numpy as np
+import json
+import spacy
+from collections import Counter
+
+# 1. Initialize spaCy for accurate token measurement
+# This must be done once outside the function
+try:
+    nlp = spacy.blank("en")
+except:
+    print("Error: spaCy 'en' model not initialized.")
+    raise
+
+def profile_spans_for_suggester(df: pd.DataFrame, name: str = "TRAIN"):
+    """
+    Analyzes the length (in tokens) of all ground-truth entities 
+    to determine the optimal sizes for the SpanCategorizer N-gram Suggester.
+    """
+    print("="*80)
+    print(f"📏 SPAN LENGTH PROFILING (Tokens) for {name}")
+    print("="*80)
+    
+    lengths = []
+    total_spans_skipped = 0
+
+    # --- Calculation Loop ---
+    for idx, row in df.iterrows():
+        try:
+            text = row['TEXT']
+            ents = json.loads(row['ENTITIES_LABEL'])
+            if not isinstance(text, str) or not ents: continue
+            
+            doc = nlp.make_doc(text) # Tokenize the text
+            
+            for e in ents:
+                # Calculate the length of the entity in tokens
+                span = doc.char_span(e['start_char'], e['end_char'], alignment_mode="contract")
+                
+                if span:
+                    lengths.append(len(span))
+                else:
+                    # Logs spans that don't align perfectly with tokens (data quality issue)
+                    total_spans_skipped += 1
+        except Exception:
+            continue # Skip row on JSON errors or missing keys
+        
+    if not lengths:
+        print("   No valid spans found for analysis.")
+        return
+
+    # --- Reporting Logic ---
+    len_counts = Counter(lengths)
+    total_spans = sum(len_counts.values())
+    sorted_lens = sorted(len_counts.keys())
+    
+    cum_pct = 0
+    suggested_sizes = []
+    
+    print(f"   {'Length':<10} {'Count':>10} {'Coverage %':>12}")
+    print("   " + "-"*34)
+    
+    for l in sorted_lens:
+        c = len_counts[l]
+        pct = (c/total_spans)*100
+        cum_pct += pct
+        print(f"   {l:<10} {c:>10,} {cum_pct:>11.1f}%")
+        
+        # We need to cover 99.5% of all entities to be safe
+        if cum_pct <= 99.5 or (cum_pct - pct) < 99.5:
+            suggested_sizes.append(l)
+
+    print("\n" + "="*80)
+    print("✅ SUGGESTED SPANCAT CONFIGURATION")
+    print(f"   Total entities analyzed: {total_spans:,}")
+    print(f"   Total spans skipped (misalignment): {total_spans_skipped}")
+    print(f"   Final Suggester Sizes: sizes = {suggested_sizes}")
+    print("="*80)
+    
+    return suggested_sizes
 
 
+# --- How to Run This Function ---
+# 
+# # 1. Replace this with your actual DataFrame loading code:
+# # train_df = spark.sql("SELECT TEXT, ENTITIES_LABEL FROM your_table").toPandas()
+# 
+# # 2. Call the function:
+# # suggested_sizes = profile_spans_for_suggester(train_df, "TRAINING DATA")
 def show_samples_by_entity_count(df, num_samples=NUM_SAMPLES, max_entity_count=5):
     """
     Display sample transactions grouped by entity count (0, 1, 2, 3, etc.)
