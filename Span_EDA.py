@@ -1,3 +1,124 @@
+# ============================================================================
+# 4. VISUALIZATION & EXPORT (DEBUG MODE)
+# ============================================================================
+
+def visualize_and_export(parsed_data, nlp, stats, best_config):
+    print("\n" + "="*80)
+    print("STEP 4: VISUAL INSPECTION (DEBUG MODE)")
+    print("="*80)
+    print("Legend:")
+    print("  🔹 EXPECTED:  The exact string from your JSON label")
+    print("  🔸 EXTRACTED: The actual tokens spaCy captured (or FAILED)")
+    print("  ⬜ TOKENS:    Shows how spaCy split the text (look for [   ] spaces!)")
+    print("="*80)
+
+    # 1. BUCKET THE DATA
+    # We want to prioritize showing errors and rescued items
+    interesting_samples = []
+    
+    for text, entities in parsed_data:
+        if not entities: continue
+        
+        doc = nlp.make_doc(text)
+        doc_status = "PERFECT" # Default
+        
+        entry_details = []
+        
+        for ent in entities:
+            # Check Alignment
+            span = doc.char_span(ent['start'], ent['end'], label=ent['label'])
+            
+            if span:
+                status = "✅ OK"
+                extracted_text = span.text
+                token_count = len(span)
+            else:
+                # Try Rescue (Expand)
+                span_expand = doc.char_span(ent['start'], ent['end'], label=ent['label'], alignment_mode="expand")
+                if span_expand:
+                    status = "⚠️ RESCUED"
+                    doc_status = "HAS_RESCUED" if doc_status != "HAS_ERROR" else doc_status
+                    extracted_text = span_expand.text
+                    token_count = len(span_expand)
+                else:
+                    status = "❌ MISALIGNED"
+                    doc_status = "HAS_ERROR"
+                    extracted_text = "NONE (Label cuts through a token)"
+                    token_count = 0
+            
+            entry_details.append({
+                'label': ent['label'],
+                'expected': ent['text'],
+                'extracted': extracted_text,
+                'status': status,
+                'tokens': token_count
+            })
+            
+        if doc_status in ["HAS_ERROR", "HAS_RESCUED"]:
+            interesting_samples.append({'text': text, 'doc': doc, 'details': entry_details, 'type': doc_status})
+    
+    # Add a few perfect ones for comparison
+    perfect_samples = []
+    for text, entities in parsed_data:
+        if len(perfect_samples) >= 2: break
+        # Simple check if this doc was already caught as an error
+        if not any(s['text'] == text for s in interesting_samples):
+             doc = nlp.make_doc(text)
+             # Reprocess briefly to match structure
+             details = []
+             for ent in entities:
+                 span = doc.char_span(ent['start'], ent['end'])
+                 if span: details.append({'label': ent['label'], 'expected': ent['text'], 'extracted': span.text, 'status': "✅ OK", 'tokens': len(span)})
+             perfect_samples.append({'text': text, 'doc': doc, 'details': details, 'type': "PERFECT"})
+
+    # Combine: Errors first, then Rescued, then 2 Perfect examples
+    final_display = sorted(interesting_samples, key=lambda x: x['type'] == 'HAS_ERROR', reverse=True)[:10] + perfect_samples
+
+    # 2. PRINT THE SAMPLES
+    for i, sample in enumerate(final_display, 1):
+        print(f"\n📄 DOC {i} [{sample['type']}]")
+        print("-" * 80)
+        print(f"TEXT:   {sample['text']}")
+        
+        # VISUALIZE TOKENS (Crucial for seeing spaces)
+        # We put brackets [ ] around tokens so you can see invisible spaces
+        token_view = " ".join([f"[{t.text}]" for t in sample['doc']])
+        print(f"TOKENS: {token_view}")
+        print("-" * 80)
+        
+        print(f"{'STATUS':<15} {'LABEL':<15} {'EXPECTED (JSON)':<20} {'EXTRACTED (SPACY)':<25} {'TOKENS'}")
+        print("-" * 80)
+        
+        for d in sample['details']:
+            # Truncate for display
+            exp = (d['expected'][:18] + '..') if len(d['expected']) > 18 else d['expected']
+            ext = (d['extracted'][:23] + '..') if len(d['extracted']) > 23 else d['extracted']
+            
+            print(f"{d['status']:<15} {d['label']:<15} {exp:<20} {ext:<25} {d['tokens']}")
+
+    # 3. EXPORT REPORT
+    print("\n" + "="*80)
+    print("🚀 SAVING CONFIG")
+    print("="*80)
+    
+    if IS_SPANCAT and best_config:
+        print(f"Recommended Suggester: {best_config['name']}")
+        print(f"Config: min_size={min(best_config['sizes'])}, max_size={max(best_config['sizes'])}")
+        
+        report_text = f"""
+        SUGGESTED CONFIGURATION:
+        [components.spancat.suggester]
+        @misc = "spacy.ngram_range_suggester.v1"
+        min_size = {min(best_config['sizes'])}
+        max_size = {max(best_config['sizes'])}
+        """
+        
+        with open("/dbfs/tmp/spacy_eda_report.txt", "w") as f:
+            f.write(report_text)
+        print("✅ Config saved to /dbfs/tmp/spacy_eda_report.txt")
+
+
+
 """
 ULTIMATE SPACY EDA & CONFIG VALIDATOR
 -------------------------------------
