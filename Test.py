@@ -1,4 +1,60 @@
 import pandas as pd
+import spacy
+from collections import Counter
+import re
+
+# Load your issues file
+issues_df = pd.read_csv("spacy_training_data_issues.csv")
+nlp = spacy.load("en_core_web_sm")
+
+print(f"Analyzing {len(issues_df)} misalignment issues...")
+
+# Store the culprits
+split_causes = Counter()
+detailed_causes = []
+
+for idx, row in issues_df.iterrows():
+    text = row['found_in_text']  # e.g. "Bank-of-America"
+    label = row['entity_label']
+    
+    # Ask spaCy why it splits this text
+    # nlp.tokenizer.explain returns tuples like [('TOKEN', 'Bank'), ('INFIX', '-'), ('TOKEN', 'of')...]
+    explanation = nlp.tokenizer.explain(text)
+    
+    # We only care about the rules that caused a split (INFIX, SUFFIX, PREFIX)
+    # We ignore 'TOKEN' and 'SPECIAL' (unless it's an unwanted special case)
+    current_splitters = []
+    
+    for rule_name, token_text in explanation:
+        if rule_name in ['INFIX', 'SUFFIX', 'PREFIX']:
+            split_causes[token_text] += 1
+            current_splitters.append((rule_name, token_text))
+            
+    if current_splitters:
+        detailed_causes.append({
+            'text': text,
+            'label': label,
+            'splitters': current_splitters
+        })
+
+print("\n" + "="*60)
+print("TOP CAUSES OF MISALIGNMENT")
+print("="*60)
+print(f"{'Char/Pattern':<20} {'Rule Type':<15} {'Count':<10}")
+print("-" * 45)
+
+# We might see things like: '-', '.', '/', '(', ')'
+for cause, count in split_causes.most_common(20):
+    # Find the rule type for this cause
+    rule_type = next((x[0] for x in detailed_causes for y in x['splitters'] if y[1] == cause), "UNKNOWN")
+    print(f"'{cause}'".ljust(20) + f"{rule_type:<15} {count:<10}")
+
+print("\n(Use these characters to build your Custom Tokenizer in Phase 2)")
+
+
+
+
+import pandas as pd
 import json
 import re
 from collections import Counter
